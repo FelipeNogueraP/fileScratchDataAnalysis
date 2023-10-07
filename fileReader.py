@@ -1,5 +1,56 @@
 import pandas as pd
 import docx2txt
+import os
+from listadoPalabras import PALABRAS_CLAVE
+
+
+class VerdaderoHandler:
+    """VERDADEROS (los que SÍ solicitan acceso al material de la prueba):
+    1. Leer en detalle las tipologías.
+    2. Si en la casilla de acceso a la prueba está en estado VERDADERO no se debe tabular. (dejar
+    en blanco todas las casillas).
+    3. Identificar si hay un tema nuevo o diferente a las tipologías creadas, en caso positivo, se
+    deberá incluir en la columna “RECLAMACIONES PARTICULARES” lo solicitado por el aspirante en forma textual."""
+
+    @staticmethod
+    def handle_verdadero(row):
+        detalle_lower = row['detalle'].lower()
+        if row['acceso_solicitud_pruebas'] == 'VERDADERO':
+            for col in row.index[row.index.get_loc('auditor') + 1:]:
+                row[col] = ''
+            for palabra in PALABRAS_CLAVE:
+                if palabra in detalle_lower:
+                    row['RECLAMACIONES PARTICULARES'] = row['detalle']
+                    break
+        return row
+
+
+class FalsosHandler:
+    def __init__(self, row):
+        self.row = row
+
+    def is_falso_condicionado(self):
+        return 'ANEXO' in self.row['asunto'] or 'ANEXO' in self.row['detalle']
+
+    def is_falso_positivo(self):
+        detalle_lower = self.row['detalle'].lower()
+        return any(palabra in detalle_lower for palabra in PALABRAS_CLAVE)
+
+    def handle(self):
+        if self.is_falso_condicionado():
+            # El código original para falso condicionado
+            for col in self.row.index:
+                if col not in ['id_reclamacion', 'nombre', 'identificacion', 'nombre2', 'apellido', 'email', 'id_inscripcion', 'nro_opec', 'denominacion', 'nivel', 'grado', 'estado_reclamacion', 'fecha_reclamacion', 'estado_inicial', 'detalle', 'asunto', 'con_anexo', 'descripcion', 'acceso_solicitud_pruebas', 'analista', 'auditor']:
+                    self.row[col] = 0
+            self.row['observaciones'] = 'VER ANEXO'
+        elif self.is_falso_positivo():
+            # El código original para falso positivo
+            self.row['Tipologia 1'] = 1
+            self.row['observaciones'] = 'FALSO POSITIVO'
+            for col in self.row.index:
+                if col not in ['id_reclamacion', 'nombre', 'identificacion', 'nombre2', 'apellido', 'email', 'id_inscripcion', 'nro_opec', 'denominacion', 'nivel', 'grado', 'estado_reclamacion', 'fecha_reclamacion', 'estado_inicial', 'detalle', 'asunto', 'con_anexo', 'descripcion', 'acceso_solicitud_pruebas', 'analista', 'auditor', 'Tipologia 1', 'observaciones']:
+                    self.row[col] = 0
+        return self.row
 
 
 def load_data(xlsx_path, tipologias_path, criterios_path):
@@ -13,68 +64,42 @@ def load_data(xlsx_path, tipologias_path, criterios_path):
     return df, tipologias, df_criterios_text
 
 
-def check_keywords(text):
-    keywords = [
-        "Aciertos", "Acceso", "Citación", "Citar", "Clave", "Cite", "Comparar", "Comprobar", "Confirmar",
-        "Conocer", "Copia del material", "Constatar", "Corroborar", "Cotejar", "Cuadernillo", "Examinar",
-        "Exhibición", "Exponer", "Inspeccionar", "Material", "Mirar", "Mostrar", "Revisar", "Validar",
-        "ver", "Verificar", "Visualizar", "Revisión manual", "Preguntas que respondió bien", "Preguntas que respondió mal"
-    ]
-    return any(keyword.lower() in text.lower() for keyword in keywords)
-
-
 def process_row(row, tipologias):
-    detalle = str(row["detalle"])
-
-    # Check for VERDADERO
     if row["acceso_solicitud_pruebas"] == "VERDADERO":
-        for col in row.index[7:-1]:
-            row[col] = ""
-        return row
-
-    # Check for keywords
-    if check_keywords(detalle):
-        row["Tipología 1"] = 1
-        row["observaciones"] = "FALSO POSITIVO"
-        return row
-
-    # Check for FALSO with ANEXO
-    if "ANEXO" in detalle:
-        for col in row.index[7:-1]:
-            row[col] = 0
-        row["observaciones"] = "VER ANEXO"
-        return row
-
-    # Check for tipologias
-    matched_tipologia = next(
-        (tipologia for tipologia in tipologias if tipologia.lower() in detalle.lower()), None)
-    if matched_tipologia:
-        col_name = matched_tipologia.split(" ")[1]
-        row[f"Tipología {col_name}"] = 1
-    else:
-        row["RECLAMACIONES PARTICULARES"] = detalle
-        for col in row.index[7:-1]:
-            row[col] = 0
-
-    # Update "ESTADO ANALISTA"
-    row["ESTADO ANALISTA"] = "OK"
+        row = VerdaderoHandler.handle_verdadero(row)
+    elif row["acceso_solicitud_pruebas"] == "FALSO":
+        handler = FalsosHandler(row)
+        row = handler.handle()
     return row
 
 
-def process_data(df, tipologias):
-    df_luisa = df[df["analista"] == "Luisa Figueroa"].copy()
+def save_to_excel(df, path):
+    if os.path.exists(path):
+        base, ext = os.path.splitext(path)
+        counter = 1
+        while os.path.exists(path):
+            path = base + f"_{counter}" + ext
+            counter += 1
+    df.to_excel(path, index=False)
+
+
+def process_data_v2(df_original, tipologias):
+    df_processed = df_original.copy()
+
+    df_luisa = df_processed[df_processed["analista"]
+                            == "Luisa Figueroa"].copy()
     df_luisa_processed = df_luisa.apply(
         lambda row: process_row(row, tipologias), axis=1)
-    return df_luisa_processed
+    df_processed.update(df_luisa_processed)
 
-
-def save_to_excel(df, output_path):
-    df.to_excel(output_path, index=False)
+    return df_processed
 
 
 if __name__ == "__main__":
-    # Using the functions
     df, tipologias, criterios_text = load_data(
-        "ruta_al_archivo.xlsx", "ruta_al_archivo_tipologias.docx", "ruta_al_archivo_criterios.docx")
-    df_processed = process_data(df, tipologias)
-    save_to_excel(df_processed, "ruta_donde_guardar.xlsx")
+        "/Users/Felipe/Downloads/inicial.xlsx",
+        "/Users/Felipe/Downloads/Consolidado_Tipologias_Reclamaciones.docx",
+        "/Users/Felipe/Downloads/CRITERIOS_DE_ANALISIS.docx")
+    df_processed = process_data_v2(df, tipologias)
+    save_to_excel(df_processed, "/Users/Felipe/Downloads/resultado.xlsx")
+    print("Realizado con exito")
